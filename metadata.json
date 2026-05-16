@@ -1,0 +1,8 @@
+{
+  "name": "Conquista Galáctica",
+  "description": "Um épico jogo de guerra espacial com batalhas entre frotas e naves-mãe. Controle sua nave com WASD, atire com o mouse e use habilidades especiais.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
