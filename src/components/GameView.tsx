@@ -432,6 +432,41 @@ const ParticleSystem: React.FC<{ engine: GameEngine }> = ({ engine }) => {
   );
 };
 
+const DebrisSystem: React.FC<{ engine: GameEngine }> = ({ engine }) => {
+  return (
+    <group>
+      {engine.debrisList.map((d, i) => {
+        if (d.type === 'astronaut') {
+          return (
+            <group key={`debris-${i}`} position={[d.x, d.z, d.y]} rotation={[d.rx, d.ry, d.rz]} scale={[d.size, d.size, d.size]}>
+              {/* Astronaut Body */}
+              <mesh>
+                <boxGeometry args={[4, 6, 4]} />
+                <meshStandardMaterial color="#ffffff" roughness={0.9} />
+              </mesh>
+              {/* Helmet Visor */}
+              <mesh position={[0, 4, 1]}>
+                 <boxGeometry args={[3, 3, 3]} />
+                 <meshStandardMaterial color="#ffaa00" roughness={0.1} metalness={0.8} />
+              </mesh>
+              <mesh position={[0, 4, 0]}>
+                 <boxGeometry args={[4, 4, 4]} />
+                 <meshStandardMaterial color="#ffffff" roughness={0.9} />
+              </mesh>
+            </group>
+          );
+        }
+        return (
+          <mesh key={`debris-${i}`} position={[d.x, d.z, d.y]} rotation={[d.rx, d.ry, d.rz]} scale={[d.size, d.size, d.size]}>
+             <icosahedronGeometry args={[6, 0]} />
+             <meshStandardMaterial color={d.color} metalness={0.8} roughness={0.4} />
+          </mesh>
+        );
+      })}
+    </group>
+  );
+};
+
 const GameScene: React.FC<{ engine: GameEngine, onExit: (restart?: boolean) => void }> = ({ engine, onExit }) => {
   const playerRef = useRef<THREE.Group>(null);
   const keys = useRef<Set<string>>(new Set());
@@ -480,27 +515,31 @@ const GameScene: React.FC<{ engine: GameEngine, onExit: (restart?: boolean) => v
     const player = engine.player;
     if (player && player.health > 0) {
       if (inputState.joystick.x !== 0 || inputState.joystick.y !== 0) {
-        // Joystick gives y positive for UP. Game engine uses y positive for DOWN (since it maps to 3D Z-axis usually).
-        const targetAngle = Math.atan2(-inputState.joystick.y, inputState.joystick.x);
+        // Relativistic controls (Chase Camera):
+        // Joystick X turns left/right. Joystick Y controls forward/backward throttle.
+        const normalizedX = inputState.joystick.x / 35; // Approx -1 to 1
+        // Joystick Y is negative when pushed UP in DOM coords, so we negate it:
+        const normalizedY = -inputState.joystick.y / 35; // Positive favors Forward
         
-        // Rotate towards target angle smoothly but quickly
-        const diff = targetAngle - player.angle;
-        const normalizedDiff = Math.atan2(Math.sin(diff), Math.cos(diff));
-        player.angle += Math.sign(normalizedDiff) * Math.min(Math.abs(normalizedDiff), player.config.rotationSpeed * 3);
+        // Turn (Left/Right) - Inverted: increasing angle goes left in 2D math, so we subtract
+        player.angle -= normalizedX * player.config.rotationSpeed * 2.0;
         
-        // Move with speed based on distance along the TARGET angle, not the player angle.
-        // This makes it so pushing "Forward" (Up) immediately pushes the ship up globally.
-        const distance = Math.min(1, Math.sqrt(inputState.joystick.x**2 + inputState.joystick.y**2) / 40);
-        player.vx += Math.cos(targetAngle) * player.config.speed * 0.15 * distance;
-        player.vy += Math.sin(targetAngle) * player.config.speed * 0.15 * distance;
+        // Move (Forward/Backward)
+        if (normalizedY > 0) { // Forward
+          player.vx += Math.cos(player.angle) * player.config.speed * 0.4 * normalizedY;
+          player.vy += Math.sin(player.angle) * player.config.speed * 0.4 * normalizedY;
+        } else if (normalizedY < 0) { // Backward/Brake
+          player.vx += Math.cos(player.angle) * player.config.speed * 0.15 * normalizedY;
+          player.vy += Math.sin(player.angle) * player.config.speed * 0.15 * normalizedY;
+        }
       } else {
         if (keys.current.has('w') || inputState.up) {
-          player.vx += Math.cos(player.angle) * player.config.speed * 0.15;
-          player.vy += Math.sin(player.angle) * player.config.speed * 0.15;
+          player.vx += Math.cos(player.angle) * player.config.speed * 0.4;
+          player.vy += Math.sin(player.angle) * player.config.speed * 0.4;
         }
         if (keys.current.has('s') || inputState.down) {
-          player.vx -= Math.cos(player.angle) * player.config.speed * 0.1;
-          player.vy -= Math.sin(player.angle) * player.config.speed * 0.1;
+          player.vx -= Math.cos(player.angle) * player.config.speed * 0.15;
+          player.vy -= Math.sin(player.angle) * player.config.speed * 0.15;
         }
         if (keys.current.has('a') || inputState.left) player.angle -= player.config.rotationSpeed;
         if (keys.current.has('d') || inputState.right) player.angle += player.config.rotationSpeed;
@@ -557,6 +596,7 @@ const GameScene: React.FC<{ engine: GameEngine, onExit: (restart?: boolean) => v
       ))}
 
       <BulletSystem engine={engine} />
+      <DebrisSystem engine={engine} />
 
       {engine.motherships.map((ms, idx) => (
         <group key={`ms-${idx}`} position={[ms.x, ms.z, ms.y]}>

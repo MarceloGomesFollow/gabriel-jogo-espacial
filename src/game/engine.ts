@@ -74,6 +74,59 @@ export class Bullet {
   }
 }
 
+export class Debris {
+  x: number = 0;
+  y: number = 0;
+  z: number = 0;
+  vx: number;
+  vy: number;
+  vz: number;
+  rx: number;
+  ry: number;
+  rz: number;
+  vrx: number;
+  vry: number;
+  vrz: number;
+  life: number;
+  maxLife: number;
+  color: number;
+  size: number;
+  type: 'debris' | 'astronaut';
+
+  constructor(x: number, y: number, z: number, vx: number, vy: number, vz: number, life: number, color: number, size: number, type: 'debris' | 'astronaut') {
+    this.x = x;
+    this.y = y;
+    this.z = z;
+    this.vx = vx;
+    this.vy = vy;
+    this.vz = vz;
+    this.rx = Math.random() * Math.PI * 2;
+    this.ry = Math.random() * Math.PI * 2;
+    this.rz = Math.random() * Math.PI * 2;
+    this.vrx = (Math.random() - 0.5) * 0.2;
+    this.vry = (Math.random() - 0.5) * 0.2;
+    this.vrz = (Math.random() - 0.5) * 0.2;
+    this.life = life;
+    this.maxLife = life;
+    this.color = color;
+    this.size = size;
+    this.type = type;
+  }
+
+  update() {
+    this.vx *= 0.98;
+    this.vy *= 0.98;
+    this.vz *= 0.98;
+    this.x += this.vx;
+    this.y += this.vy;
+    this.z += this.vz;
+    this.rx += this.vrx;
+    this.ry += this.vry;
+    this.rz += this.vrz;
+    this.life -= 1;
+  }
+}
+
 export class Ship {
   id: string;
   x: number;
@@ -311,11 +364,45 @@ export class GameEngine {
   upgrades: any = null;
   particles: Particle[] = Array.from({length: 8000}, () => new Particle());
   particleIndex: number = 0;
+  debrisList: Debris[] = [];
 
   addParticle(x: number, y: number, z: number, vx: number, vy: number, vz: number, life: number, color: number, size: number) {
     const p = this.particles[this.particleIndex];
     p.spawn(x, y, z, vx, vy, vz, life, color, size);
     this.particleIndex = (this.particleIndex + 1) % this.particles.length;
+  }
+
+  spawnShipDebris(x: number, y: number, color: number, scale: number) {
+    const debrisCount = Math.floor(Math.random() * 3) + 3; // 3 to 5 chunks
+    for (let i = 0; i < debrisCount; i++) {
+        const speed = Math.random() * 3 * scale + 1;
+        const angle = Math.random() * Math.PI * 2;
+        this.debrisList.push(new Debris(
+            x + (Math.random() - 0.5) * 10 * scale,
+            y + (Math.random() - 0.5) * 10 * scale,
+            (Math.random() - 0.5) * 10 * scale,
+            Math.cos(angle) * speed,
+            Math.sin(angle) * speed,
+            (Math.random() - 0.5) * speed,
+            400 + Math.random() * 200,
+            color,
+            (Math.random() * 2 + 1) * scale,
+            'debris'
+        ));
+    }
+    // Spawn astronaut
+    const vSpeed = Math.random() * 1.5 + 0.5;
+    const vAngle = Math.random() * Math.PI * 2;
+    this.debrisList.push(new Debris(
+        x, y, 0,
+        Math.cos(vAngle) * vSpeed,
+        Math.sin(vAngle) * vSpeed,
+        (Math.random() - 0.5) * vSpeed,
+        800, // Living longer
+        0xffffff,
+        0.5 * scale,
+        'astronaut'
+    ));
   }
 
   spawnExplosion(x: number, y: number, color: number, scale: number = 1) {
@@ -450,6 +537,11 @@ export class GameEngine {
     }
 
     this.bullets = this.bullets.filter(b => b.life > 0);
+    this.debrisList = this.debrisList.filter(d => d.life > 0);
+
+    for (const d of this.debrisList) {
+        d.update();
+    }
 
     for (const ship of this.ships) {
       ship.update(this);
@@ -528,6 +620,7 @@ export class GameEngine {
                  this.playerKills += 1;
               }
               this.spawnExplosion(ship.x, ship.y, ship.team === Team.PLAYER ? 0x3b82f6 : 0xef4444, 1.5);
+              this.spawnShipDebris(ship.x, ship.y, ship.team === Team.PLAYER ? 0x3b82f6 : 0xef4444, 1.5);
           }
           bullet.life = 0;
           return;
