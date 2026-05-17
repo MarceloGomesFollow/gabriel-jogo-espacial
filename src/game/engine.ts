@@ -5,6 +5,42 @@
 
 import { Vector, Team, ShipType, SHIP_CONFIGS, ShipConfig } from "../types";
 
+export class Particle {
+  active: boolean = false;
+  x: number = 0;
+  y: number = 0;
+  z: number = 0;
+  vx: number = 0;
+  vy: number = 0;
+  vz: number = 0;
+  life: number = 0;
+  maxLife: number = 0;
+  color: number = 0xffffff;
+  size: number = 1;
+
+  spawn(x: number, y: number, z: number, vx: number, vy: number, vz: number, life: number, color: number, size: number) {
+    this.x = x; this.y = y; this.z = z;
+    this.vx = vx; this.vy = vy; this.vz = vz;
+    this.life = life; this.maxLife = life;
+    this.color = color;
+    this.size = size;
+    this.active = true;
+  }
+
+  update() {
+    this.vx *= 0.95;
+    this.vy *= 0.95;
+    this.vz *= 0.95;
+    this.x += this.vx;
+    this.y += this.vy;
+    this.z += this.vz;
+    this.life -= 1;
+    if (this.life <= 0) {
+      this.active = false;
+    }
+  }
+}
+
 export class Bullet {
   x: number;
   y: number;
@@ -16,6 +52,7 @@ export class Bullet {
   damage: number;
   life: number = 100;
   isMissile: boolean;
+  colorVariant: boolean;
 
   constructor(x: number, y: number, z: number, angle: number, speed: number, team: Team, damage: number, isMissile: boolean = false) {
     this.x = x;
@@ -26,6 +63,7 @@ export class Bullet {
     this.team = team;
     this.damage = damage;
     this.isMissile = isMissile;
+    this.colorVariant = Math.random() < 0.5;
   }
 
   update() {
@@ -52,6 +90,8 @@ export class Ship {
   config: ShipConfig;
   health: number;
   maxHealth: number;
+  shield: number;
+  maxShield: number;
   lastFired: number = 0;
   lastMissileFired: number = 0;
   lastAbilityUsed: number = 0;
@@ -71,11 +111,18 @@ export class Ship {
     this.config = SHIP_CONFIGS[type];
     this.health = this.config.health;
     this.maxHealth = this.config.health;
+    this.maxShield = this.config.health * 0.5; // Shield is 50% of health
+    this.shield = this.maxShield;
     this.isPlayer = isPlayer;
     this.angle = team === Team.PLAYER ? 0 : Math.PI;
   }
 
   update(engine: GameEngine) {
+    // Shield regeneration
+    if (this.shield < this.maxShield) {
+        this.shield = Math.min(this.maxShield, this.shield + 0.05);
+    }
+
     if (this.abilityActive) {
       this.abilityTimer -= 16;
       if (this.abilityTimer <= 0) {
@@ -100,6 +147,26 @@ export class Ship {
     // Visual banking logic
     const lateralSpeed = -Math.sin(this.angle) * this.vx + Math.cos(this.angle) * this.vy;
     this.roll = lateralSpeed * 0.1;
+
+    // Engine Exhaust Particles
+    const speedSq = this.vx * this.vx + this.vy * this.vy;
+    if (speedSq > 2) {
+        const color = this.team === Team.PLAYER ? 0x60a5fa : 0xf87171;
+        if (Math.random() < 0.6) {
+             const offsetDist = 20;
+             engine.addParticle(
+                 this.x - Math.cos(this.angle) * offsetDist + (Math.random() - 0.5) * 5,
+                 this.y - Math.sin(this.angle) * offsetDist + (Math.random() - 0.5) * 5,
+                 this.z + (Math.random() - 0.5) * 5,
+                 -this.vx * 0.2 + (Math.random() - 0.5) * 2,
+                 -this.vy * 0.2 + (Math.random() - 0.5) * 2,
+                 (Math.random() - 0.5) * 2,
+                 10 + Math.random() * 10,
+                 color,
+                 2 + Math.random() * 3
+             );
+        }
+    }
 
     // Bounds check
     this.x = Math.max(-engine.worldSize / 2, Math.min(engine.worldSize / 2, this.x));
@@ -240,7 +307,53 @@ export class GameEngine {
   winner: Team | null = null;
 
   earnedCredits: number = 0;
+  playerKills: number = 0;
   upgrades: any = null;
+  particles: Particle[] = Array.from({length: 8000}, () => new Particle());
+  particleIndex: number = 0;
+
+  addParticle(x: number, y: number, z: number, vx: number, vy: number, vz: number, life: number, color: number, size: number) {
+    const p = this.particles[this.particleIndex];
+    p.spawn(x, y, z, vx, vy, vz, life, color, size);
+    this.particleIndex = (this.particleIndex + 1) % this.particles.length;
+  }
+
+  spawnExplosion(x: number, y: number, color: number, scale: number = 1) {
+    const count = 30 * scale;
+    const colors = [color, 0xfacc15, 0xffffff, 0xf97316];
+    for (let i = 0; i < count; i++) {
+       const angle = Math.random() * Math.PI * 2;
+       const speed = Math.random() * 10 * scale;
+       const vx = Math.cos(angle) * speed;
+       const vy = Math.sin(angle) * speed;
+       const life = 20 + Math.random() * 40 * scale;
+       const size = (1 + Math.random() * 5) * scale;
+       const pColor = colors[Math.floor(Math.random() * colors.length)];
+       this.addParticle(x + (Math.random()-0.5)*5*scale, y + (Math.random()-0.5)*5*scale, (Math.random()-0.5)*5*scale, vx, vy, (Math.random()-0.5)*10*scale, life, pColor, size);
+    }
+  }
+
+  spawnSupernova(x: number, y: number, color: number) {
+    const count = 1500;
+    const colors = [color, 0xffffff, 0xfacc15, 0xffbb00, 0xf97316, 0xef4444];
+    for (let i = 0; i < count; i++) {
+       const angle = Math.random() * Math.PI * 2;
+       const speed = Math.random() * 80 + 10;
+       const vx = Math.cos(angle) * speed;
+       const vy = Math.sin(angle) * speed;
+       const life = 60 + Math.random() * 200;
+       const size = 10 + Math.random() * 40;
+       const pColor = colors[Math.floor(Math.random() * colors.length)];
+       this.addParticle(x + (Math.random()-0.5)*50, y + (Math.random()-0.5)*50, (Math.random()-0.5)*50, vx, vy, (Math.random()-0.5)*40, life, pColor, size);
+    }
+    for (let i = 0; i < 500; i++) {
+       const angle = Math.random() * Math.PI * 2;
+       const speed = Math.random() * 150;
+       const vx = Math.cos(angle) * speed;
+       const vy = Math.sin(angle) * speed;
+       this.addParticle(x, y, 0, vx, vy, (Math.random()-0.5)*50, 40 + Math.random() * 60, 0xffffff, 5 + Math.random() * 15);
+    }
+  }
 
   constructor() {
     this.init();
@@ -267,14 +380,22 @@ export class GameEngine {
     const types = [ShipType.FAST_ATTACK, ShipType.TANK, ShipType.BOMBER, ShipType.FIGHTER];
     
     // Player team
-    for (let i = 0; i < 49; i++) {
-      const type = types[Math.floor(Math.random() * types.length)];
+    for (let i = 0; i < 19; i++) {
+      let type;
+      const roll = Math.random();
+      if (roll < 0.1) type = ShipType.DESTROYER;
+      else if (roll < 0.3) type = ShipType.CRUISER;
+      else type = types[Math.floor(Math.random() * types.length)];
       this.ships.push(new Ship(`p-${i}`, -3500 + Math.random() * 1000, (Math.random() - 0.5) * 2000, Team.PLAYER, type));
     }
 
     // Enemy team
-    for (let i = 0; i < 50; i++) {
-      const type = types[Math.floor(Math.random() * types.length)];
+    for (let i = 0; i < 20; i++) {
+      let type;
+      const roll = Math.random();
+      if (roll < 0.1) type = ShipType.DESTROYER;
+      else if (roll < 0.3) type = ShipType.CRUISER;
+      else type = types[Math.floor(Math.random() * types.length)];
       this.ships.push(new Ship(`e-${i}`, 3500 - Math.random() * 1000, (Math.random() - 0.5) * 2000, Team.ENEMY, type));
     }
   }
@@ -306,6 +427,10 @@ export class GameEngine {
   }
 
   update() {
+    for (const p of this.particles) {
+      if (p.active) p.update();
+    }
+
     if (this.gameOver) return;
 
     const playerWasAlive = this.player && this.player.health > 0;
@@ -337,6 +462,21 @@ export class GameEngine {
     for (const bullet of this.bullets) {
       bullet.update();
       this.checkCollisions(bullet);
+      
+      // Bullet trail
+      if (Math.random() < 0.5) {
+        this.addParticle(
+          bullet.x + (Math.random()-0.5)*2,
+          bullet.y + (Math.random()-0.5)*2,
+          bullet.z + (Math.random()-0.5)*2,
+          -bullet.vx * 0.1,
+          -bullet.vy * 0.1,
+          0,
+          10 + Math.random() * 10,
+          bullet.isMissile ? 0xf97316 : 0x60a5fa,
+          1 + Math.random() * 2
+        );
+      }
     }
 
     // Check game over
@@ -366,10 +506,28 @@ export class GameEngine {
              bullet.life = 0;
              return;
           }
+          // Spark on hit
+          this.spawnExplosion(bullet.x, bullet.y, 0xfacc15, 0.3);
+
           const checkKill = ship.health > 0;
-          ship.health -= bullet.damage;
-          if (checkKill && ship.health <= 0 && bullet.team === Team.PLAYER) {
-              this.earnedCredits += 120 * (ship.type === ShipType.TANK ? 2 : 1);
+          let remainingDamage = bullet.damage;
+          if (ship.shield > 0) {
+            if (ship.shield >= remainingDamage) {
+              ship.shield -= remainingDamage;
+              remainingDamage = 0;
+            } else {
+              remainingDamage -= ship.shield;
+              ship.shield = 0;
+            }
+          }
+          ship.health -= remainingDamage;
+
+          if (checkKill && ship.health <= 0) {
+              if (bullet.team === Team.PLAYER) {
+                 this.earnedCredits += 120 * (ship.type === ShipType.TANK ? 2 : 1);
+                 this.playerKills += 1;
+              }
+              this.spawnExplosion(ship.x, ship.y, ship.team === Team.PLAYER ? 0x3b82f6 : 0xef4444, 1.5);
           }
           bullet.life = 0;
           return;
@@ -384,10 +542,17 @@ export class GameEngine {
         const dy = ms.y - bullet.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
         if (dist < ms.size) {
+          // Spark on hit
+          this.spawnExplosion(bullet.x, bullet.y, 0xfacc15, 0.5);
+
           const checkKill = ms.health > 0;
           ms.health -= bullet.damage;
-          if (checkKill && ms.health <= 0 && bullet.team === Team.PLAYER) {
-             this.earnedCredits += 5000;
+          if (checkKill && ms.health <= 0) {
+             if (bullet.team === Team.PLAYER) {
+                 this.earnedCredits += 5000;
+                 this.playerKills += 1;
+             }
+             this.spawnSupernova(ms.x, ms.y, ms.team === Team.PLAYER ? 0x3b82f6 : 0xef4444);
           }
           bullet.life = 0;
           return;
@@ -426,8 +591,9 @@ export class GameEngine {
   }
 
   getNearestTargetTo(x: number, y: number, myTeam: Team) {
-    let nearest: Ship | null = null;
+    let nearest: Ship | Mothership | null = null;
     let minDist = Infinity;
+    
     for (const s of this.ships) {
       if (s.team !== myTeam) {
         const d = Math.sqrt((s.x - x) ** 2 + (s.y - y) ** 2);
@@ -437,6 +603,17 @@ export class GameEngine {
         }
       }
     }
+    
+    for (const ms of this.motherships) {
+      if (ms.team !== myTeam && ms.health > 0) {
+        const d = Math.sqrt((ms.x - x) ** 2 + (ms.y - y) ** 2);
+        if (d < minDist) {
+          minDist = d;
+          nearest = ms;
+        }
+      }
+    }
+    
     return nearest;
   }
 }

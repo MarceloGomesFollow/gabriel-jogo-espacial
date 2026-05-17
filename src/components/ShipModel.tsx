@@ -166,32 +166,63 @@ const Thruster = ({ position, rotation, scale = 1, glowColor, ship }: any) => {
 
 const WeaponMuzzle = ({ position, rotation, scale = 1, glowColor, ship }: any) => {
   const flashRef = useRef<THREE.MeshStandardMaterial>(null);
-  const lightRef = useRef<THREE.PointLight>(null);
+  const ringRef = useRef<THREE.Mesh>(null);
+  const barrelGlowRef = useRef<THREE.MeshStandardMaterial>(null);
 
   useFrame(() => {
     let flash = 0;
+    let ringScale = 0.01;
+    let ringOpacity = 0;
+    let heat = 0;
+
     if (ship) {
       const timeSincePrimary = Date.now() - (ship.lastFiredPrimary || 0);
       const timeSinceSecondary = Date.now() - (ship.lastFiredSecondary || 0);
+      const minTime = Math.min(timeSincePrimary, timeSinceSecondary);
+
       // Brief bright flash right after firing
-      if (timeSincePrimary < 50 || timeSinceSecondary < 50) {
-        flash = Math.random() * 5 + 4; // High intensity flash
-      } else if (timeSincePrimary < 150 || timeSinceSecondary < 150) {
-        flash = 1; // Falloff
+      if (minTime < 50) {
+        flash = Math.random() * 8 + 6; // Very high intensity flash
+        ringScale = 0.5 + (minTime / 50) * 3;
+        ringOpacity = 1 - (minTime / 50);
+      } else if (minTime < 150) {
+        flash = 2 - ((minTime - 50) / 100) * 2; // Fast falloff
+      }
+
+      if (minTime < 1000) {
+        // Barrel retains heat longer
+        heat = 1 - (minTime / 1000); // 1 to 0 over 1 second
       }
     }
     
     if (flashRef.current) flashRef.current.emissiveIntensity = flash;
-    if (lightRef.current) lightRef.current.intensity = flash;
+    if (barrelGlowRef.current) barrelGlowRef.current.emissiveIntensity = heat * 4;
+    
+    if (ringRef.current) {
+        ringRef.current.scale.set(ringScale, ringScale, ringScale);
+        (ringRef.current.material as THREE.MeshBasicMaterial).opacity = ringOpacity;
+    }
   });
 
   return (
     <group position={position} rotation={rotation} scale={scale}>
+      {/* Central Flash Core */}
       <mesh>
-        <sphereGeometry args={[0.06, 8, 8]} />
-        <meshStandardMaterial ref={flashRef} color="#fff" emissive={glowColor} emissiveIntensity={0} toneMapped={false} transparent opacity={0.8} />
+        <sphereGeometry args={[0.08, 12, 12]} />
+        <meshStandardMaterial ref={flashRef} color="#fff" emissive={glowColor} emissiveIntensity={0} toneMapped={false} transparent opacity={0.9} />
       </mesh>
-      <pointLight ref={lightRef} color={glowColor} intensity={0} distance={4} />
+      
+      {/* Expanding Shockwave Ring */}
+      <mesh ref={ringRef} rotation={[Math.PI / 2, 0, 0]}>
+        <ringGeometry args={[0.08, 0.15, 16]} />
+        <meshBasicMaterial color={glowColor} transparent opacity={0} side={THREE.DoubleSide} toneMapped={false} />
+      </mesh>
+
+      {/* Heated Barrel Glow */}
+      <mesh position={[0, 0, -0.2]} rotation={[Math.PI / 2, 0, 0]}>
+        <cylinderGeometry args={[0.05, 0.05, 0.5, 8]} />
+        <meshStandardMaterial ref={barrelGlowRef} color={glowColor} emissive={glowColor} emissiveIntensity={0} toneMapped={false} transparent opacity={0.5} />
+      </mesh>
     </group>
   );
 };
@@ -209,9 +240,13 @@ interface ShipModelProps {
 
 export const ShipModel: React.FC<ShipModelProps> = ({ type, teamColor, isPlayer, ship }) => {
   const color = new THREE.Color(teamColor);
-  const darkMetal = new THREE.Color("#121418");
-  const armorColor = new THREE.Color("#1f242d");
-  const glowColor = teamColor === "#3b82f6" ? new THREE.Color("#00eeff") : new THREE.Color("#ff1144");
+  if (!isPlayer) {
+     color.multiplyScalar(1.5); // Brighten enemy team color
+  }
+
+  const darkMetal = new THREE.Color(isPlayer ? "#121418" : "#333d4d");
+  const armorColor = new THREE.Color(isPlayer ? "#1f242d" : "#4b5563");
+  const glowColor = teamColor === "#3b82f6" ? new THREE.Color("#00eeff") : new THREE.Color("#ff6b81");
   
   const textures = getSharedTextures();
 
@@ -358,8 +393,6 @@ export const ShipModel: React.FC<ShipModelProps> = ({ type, teamColor, isPlayer,
           <GreebleBox key={i} position={[0, 0.45, z]} args={[0.3, 0.1, 0.2]} materials={darkMaterial} />
         ))}
         <Vent pos={[0, 0.38, -0.8]} />
-
-        <pointLight color={glowColor} intensity={10} distance={15} position={[0, 0, -3]} />
       </group>
     );
   }
@@ -454,8 +487,6 @@ export const ShipModel: React.FC<ShipModelProps> = ({ type, teamColor, isPlayer,
             <meshStandardMaterial color="#222" metalness={0.9} />
           </mesh>
         ))}
-
-        <pointLight color={glowColor} intensity={15} distance={25} position={[0, 0, -4]} />
       </group>
     );
   }
@@ -545,13 +576,197 @@ export const ShipModel: React.FC<ShipModelProps> = ({ type, teamColor, isPlayer,
         <Vent pos={[0.8, 1.2, -1]} scale={1.5} />
         <Vent pos={[-0.8, 1.2, -1]} scale={1.5} />
         <Antenna pos={[0, 1.2, 1.5]} />
-
-        <pointLight color={glowColor} intensity={15} distance={30} position={[0, 0, -5]} />
       </group>
     );
   }
 
-  // 4. FIGHTER: Ultra-advanced Air-Superiority stealth aircraft, extreme detail
+  // 4. CRUISER: Long, majestic, heavily armed, multiple decks
+  if (type === ShipType.CRUISER) {
+    return (
+      <group>
+        {/* Main Hull Spine */}
+        <mesh position={[0, 0, 0]}>
+          <boxGeometry args={[1.5, 1.8, 12]} />
+          <primitive object={darkMaterial} attach="material" />
+        </mesh>
+        
+        {/* Forward Hammerhead */}
+        <group position={[0, 0, 6]}>
+           <mesh>
+             <boxGeometry args={[4, 1.5, 2.5]} />
+             <primitive object={armorMaterial} attach="material" />
+           </mesh>
+           <mesh position={[0, 0.8, -0.5]}>
+             <boxGeometry args={[2, 0.8, 1.5]} />
+             <primitive object={paintedMaterial} attach="material" />
+           </mesh>
+           <CockpitLight position={[0, 1.2, 0.3]} glowColor={glowColor} ship={ship} scale={2} />
+        </group>
+
+        {/* Side Armor Pontoons */}
+        {[2.5, -2.5].map((x, i) => (
+           <group key={i} position={[x, -0.2, 0]}>
+             <mesh>
+               <boxGeometry args={[1.2, 1.2, 8]} />
+               <primitive object={paintedMaterial} attach="material" />
+             </mesh>
+             {/* Broadside Turrets */}
+             {[-2, 0, 2].map((z, j) => (
+                <group key={j} position={[x > 0 ? 0.8 : -0.8, 0.4, z]}>
+                   <mesh>
+                     <boxGeometry args={[0.6, 0.6, 0.8]} />
+                     <primitive object={darkMaterial} attach="material" />
+                   </mesh>
+                   <mesh position={[x > 0 ? 0.5 : -0.5, 0, 0]} rotation={[0, 0, Math.PI/2]}>
+                     <cylinderGeometry args={[0.08, 0.08, 1, 8]} />
+                     <meshStandardMaterial color="#111" />
+                   </mesh>
+                   <WeaponMuzzle position={[x > 0 ? 1 : -1, 0, 0]} glowColor={glowColor} ship={ship} />
+                </group>
+             ))}
+             <Thruster position={[0, 0, -4]} scale={1.5} glowColor={glowColor} ship={ship} />
+           </group>
+        ))}
+
+        {/* Main Engines */}
+        <group position={[0, 0, -6]}>
+           <Thruster position={[0, 0.4, 0]} scale={2} glowColor={glowColor} ship={ship} />
+           <Thruster position={[0, -0.6, 0]} scale={1.8} glowColor={glowColor} ship={ship} />
+        </group>
+        
+        {/* Dorsal Superstructure / Command Tower */}
+        <group position={[0, 1.5, -2]}>
+           <mesh>
+             <boxGeometry args={[1.2, 2, 3]} />
+             <primitive object={armorMaterial} attach="material" />
+           </mesh>
+           <mesh position={[0, 1.2, 0.5]}>
+             <boxGeometry args={[1.8, 0.8, 1.5]} />
+             <primitive object={darkMaterial} attach="material" />
+           </mesh>
+           {/* Bridge Windows */}
+           <mesh position={[0, 1.4, 1.3]}>
+             <boxGeometry args={[1.4, 0.3, 0.1]} />
+             <meshStandardMaterial color={glowColor} emissive={glowColor} emissiveIntensity={3} />
+           </mesh>
+           <Antenna pos={[0, 1.8, -0.5]} scale={2} />
+        </group>
+      </group>
+    );
+  }
+
+  // 5. DESTROYER: Massive, fat, wide, incredibly heavily armored
+  if (type === ShipType.DESTROYER) {
+    return (
+      <group>
+        {/* Massive Central Bulk */}
+        <mesh position={[0, 0, 0]}>
+          <boxGeometry args={[7, 3, 16]} />
+          <primitive object={darkMaterial} attach="material" />
+        </mesh>
+        
+        {/* Layered Front Armor Plates */}
+        <group position={[0, 0, 8]}>
+           <mesh position={[0, 0, 0.5]}>
+             <boxGeometry args={[5, 2.5, 1]} />
+             <primitive object={armorMaterial} attach="material" />
+           </mesh>
+           <mesh position={[0, -0.5, 1.2]}>
+             <boxGeometry args={[3, 1, 1]} />
+             <primitive object={paintedMaterial} attach="material" />
+           </mesh>
+           <mesh position={[0, -0.5, 1.8]}>
+             <boxGeometry args={[1, 0.6, 1]} />
+             <meshStandardMaterial color="#222" />
+           </mesh>
+        </group>
+        
+        {/* Deep Trenches / Greebles */}
+        <mesh position={[0, 1.6, 0]}>
+           <boxGeometry args={[2, 0.5, 14]} />
+           <meshStandardMaterial color="#050505" />
+        </mesh>
+
+        {/* Port & Starboard Engine Nacelles */}
+        {[4.5, -4.5].map((x, i) => (
+           <group key={i} position={[x, 0, -4]}>
+             <mesh>
+               <boxGeometry args={[2.5, 2.5, 8]} />
+               <primitive object={armorMaterial} attach="material" />
+             </mesh>
+             <mesh position={[0, 0, 4]}>
+               <boxGeometry args={[2, 2, 2]} />
+               <primitive object={paintedMaterial} attach="material" />
+             </mesh>
+             <Thruster position={[0, 0, -4]} scale={3} glowColor={glowColor} ship={ship} />
+             
+             {/* Massive Side Cannons */}
+             <group position={[x > 0 ? 1.5 : -1.5, 0, 0]}>
+                <mesh>
+                   <boxGeometry args={[1.5, 1.5, 2]} />
+                   <primitive object={darkMaterial} attach="material" />
+                </mesh>
+                <mesh position={[x > 0 ? 1 : -1, 0, 0]} rotation={[0, 0, Math.PI/2]}>
+                   <cylinderGeometry args={[0.3, 0.3, 2, 12]} />
+                   <meshStandardMaterial color="#111" />
+                </mesh>
+                <WeaponMuzzle position={[x > 0 ? 2 : -2, 0, 0]} glowColor={glowColor} ship={ship} scale={4} />
+             </group>
+           </group>
+        ))}
+
+        {/* Central Behemoth Engines */}
+        <group position={[0, 0, -8]}>
+           {[-1.5, 1.5].map((x, i) => (
+              <Thruster key={i} position={[x, 0.5, 0]} scale={2.5} glowColor={glowColor} ship={ship} />
+           ))}
+           {[-1.5, 1.5].map((x, i) => (
+              <Thruster key={i} position={[x, -0.5, 0]} scale={2.5} glowColor={glowColor} ship={ship} />
+           ))}
+        </group>
+
+        {/* Command Citadel */}
+        <group position={[0, 2.5, -3]}>
+           <mesh>
+             <boxGeometry args={[3, 2.5, 4]} />
+             <primitive object={armorMaterial} attach="material" />
+           </mesh>
+           <mesh position={[0, 1.5, 1]}>
+             <boxGeometry args={[2, 1.5, 2]} />
+             <primitive object={paintedMaterial} attach="material" />
+           </mesh>
+           <mesh position={[0, 1.8, 2.1]}>
+             <boxGeometry args={[1.8, 0.5, 0.2]} />
+             <meshStandardMaterial color={glowColor} emissive={glowColor} emissiveIntensity={4} />
+           </mesh>
+           <CockpitLight position={[0, 2, 2.3]} glowColor={glowColor} ship={ship} scale={4} />
+           <Antenna pos={[1, 2.5, -0.5]} scale={3} />
+           <Antenna pos={[-1, 2.5, -0.5]} scale={3} />
+        </group>
+        
+        {/* Central Spine Weapons */}
+        {[-2, 2, 6].map((z, i) => (
+           <group key={i} position={[0, 1.8, z]}>
+              <mesh>
+                 <boxGeometry args={[1.5, 1, 1.5]} />
+                 <primitive object={paintedMaterial} attach="material" />
+              </mesh>
+              <mesh position={[0, 0.6, 0]}>
+                 <sphereGeometry args={[0.6, 16, 16]} />
+                 <primitive object={darkMaterial} attach="material" />
+              </mesh>
+              <mesh position={[0, 0.6, 0.8]} rotation={[Math.PI/2, 0, 0]}>
+                 <cylinderGeometry args={[0.15, 0.15, 1.6, 12]} />
+                 <meshStandardMaterial color="#111" />
+              </mesh>
+              <WeaponMuzzle position={[0, 0.6, 1.8]} glowColor={glowColor} ship={ship} scale={2} />
+           </group>
+        ))}
+      </group>
+    );
+  }
+
+  // 6. FIGHTER: Ultra-advanced Air-Superiority stealth aircraft, extreme detail
   return (
     <group>
       {/* Hyper-detailed Core Fuselage */}
@@ -712,8 +927,6 @@ export const ShipModel: React.FC<ShipModelProps> = ({ type, teamColor, isPlayer,
         <primitive object={armorMaterial} attach="material" />
       </mesh>
       <Antenna pos={[0, -0.5, 1]} rot={[0, 0, Math.PI]} />
-
-      <pointLight color={glowColor} intensity={12} distance={20} position={[0, 0, -3.5]} />
     </group>
   );
 };

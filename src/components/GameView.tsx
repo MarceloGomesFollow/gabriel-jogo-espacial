@@ -7,9 +7,24 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { Stars, Float, Html } from '@react-three/drei';
 import * as THREE from 'three';
+import { Joystick } from 'react-joystick-component';
 import { GameEngine } from '../game/engine';
 import { Team, ShipType } from '../types';
 import { ShipModel } from './ShipModel';
+import { Radar } from './Radar';
+import { Move, Crosshair, Target, Zap, Rocket, Shield, Maximize, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Cpu } from "lucide-react";
+
+export const inputState = {
+  up: false,
+  down: false,
+  left: false,
+  right: false,
+  firePrimary: false,
+  fireSecondary: false,
+  ability: false,
+  target: false,
+  joystick: { x: 0, y: 0 }
+};
 
 interface GameViewProps {
   playerType: ShipType;
@@ -39,24 +54,56 @@ const ChaseCamera: React.FC<{ playerRef: React.MutableRefObject<THREE.Group | nu
   return null;
 };
 
-const Bullet3D: React.FC<{ bullet: any }> = ({ bullet }) => {
-  const color = bullet.isMissile ? "#ffffff" : (bullet.team === Team.PLAYER ? "#60a5fa" : "#ef4444");
-  const meshRef = useRef<THREE.Mesh>(null);
+const BulletSystem: React.FC<{ engine: GameEngine }> = ({ engine }) => {
+  const meshRef = useRef<THREE.InstancedMesh>(null);
+  const [geometry] = useState(() => new THREE.SphereGeometry(1, 8, 8)); // Base radius 1, scaled down
+  const [material] = useState(() => new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 1.0, toneMapped: false }));
+
+  useEffect(() => {
+    if (meshRef.current) {
+      meshRef.current.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(1000 * 3), 3);
+    }
+  }, []);
 
   useFrame(() => {
-    if (meshRef.current) {
-      meshRef.current.position.set(bullet.x, bullet.z, bullet.y);
+    if (!meshRef.current) return;
+    const bullets = engine.bullets;
+    const count = Math.min(bullets.length, 1000);
+    meshRef.current.count = count;
+
+    for (let i = 0; i < count; i++) {
+      const b = bullets[i];
+      tempObject.position.set(b.x, b.z, b.y);
+      const s = b.isMissile ? 3 : 1.5; // Bigger
+      tempObject.scale.set(s, s, s);
+      tempObject.updateMatrix();
+      meshRef.current.setMatrixAt(i, tempObject.matrix);
+
+      let colorHex = 0xffffff;
+      if (b.team === Team.PLAYER) {
+         colorHex = b.colorVariant ? 0x60a5fa : 0x1e3a8a; // Light blue / Dark blue
+      } else {
+         colorHex = b.colorVariant ? 0xef4444 : 0x7f1d1d; // Light red / Dark red
+      }
+      if (b.isMissile) {
+         colorHex = 0xff9900; // Orange for missiles to distinguish
+      }
+      tempColor.setHex(colorHex);
+      tempColor.multiplyScalar(2.0); // Make it glow / very bright
+      meshRef.current.setColorAt(i, tempColor);
+    }
+    
+    if (count > 0) {
+      meshRef.current.instanceMatrix.needsUpdate = true;
+      if (meshRef.current.instanceColor) meshRef.current.instanceColor.needsUpdate = true;
     }
   });
 
   return (
-    <mesh ref={meshRef}>
-      <sphereGeometry args={[bullet.isMissile ? 0.35 : 0.15]} />
-      <meshBasicMaterial color={color} />
-      {bullet.isMissile && <pointLight color="white" intensity={0.5} distance={10} />}
-    </mesh>
+    <instancedMesh ref={meshRef} args={[geometry, material, 1000]} />
   );
 };
+
 
 const Ship3D: React.FC<{ ship: any, isPlayer?: boolean, playerRef?: any }> = ({ ship, isPlayer, playerRef }) => {
   const groupRef = useRef<THREE.Group>(null);
@@ -82,20 +129,92 @@ const Ship3D: React.FC<{ ship: any, isPlayer?: boolean, playerRef?: any }> = ({ 
           <meshBasicMaterial color="#93c5fd" transparent opacity={0.2} wireframe />
         </mesh>
       )}
-      {/* Ship HUD in world (optional, but engine trails look better) */}
-      <Float floatIntensity={2} speed={5}>
-          <pointLight color={ship.team === Team.PLAYER ? "#3b82f6" : "#ef4444"} intensity={0.5} distance={10} position={[0,0,-2]} />
-      </Float>
+      {ship.shield > 0 && (
+        <mesh>
+          <sphereGeometry args={[ship.config.size * 0.12, 32, 32]} />
+          <meshBasicMaterial color={ship.team === Team.PLAYER ? "#3b82f6" : "#ef4444"} transparent opacity={0.15 * (ship.shield / ship.maxShield)} wireframe={false} depthWrite={false} blending={THREE.AdditiveBlending} />
+        </mesh>
+      )}
     </group>
   );
 };
 
 // Separate HUD component to prevent Canvas re-renders
+const MobileControls = () => {
+  return (
+    <div 
+      className="fixed inset-0 pointer-events-none flex justify-between items-end p-4 md:p-8 z-30 bottom-8 select-none touch-callout-none"
+      onContextMenu={(e) => e.preventDefault()}
+    >
+      {/* Directional Controls */}
+      <div className="relative pointer-events-auto opacity-70 touch-none ml-4 mb-4">
+        <Joystick 
+          size={120} 
+          stickSize={50} 
+          baseColor="rgba(255,255,255,0.1)" 
+          stickColor="rgba(255,255,255,0.4)" 
+          move={(e: any) => {
+            inputState.joystick.x = e.x || 0;
+            inputState.joystick.y = e.y || 0;
+          }} 
+          stop={() => {
+            inputState.joystick.x = 0;
+            inputState.joystick.y = 0;
+          }}
+        />
+      </div>
+
+      {/* Action Controls */}
+      <div className="flex gap-2 pointer-events-auto opacity-80 flex-col items-end touch-none">
+        <div className="flex gap-4 mb-2 mr-4">
+          <button 
+            onPointerDown={() => inputState.target = true}
+            onPointerUp={() => inputState.target = false}
+            onPointerLeave={() => inputState.target = false}
+            onTouchStart={(e) => { e.preventDefault(); inputState.target = true; }}
+            onTouchEnd={(e) => { e.preventDefault(); inputState.target = false; }}
+            className="w-12 h-12 bg-green-500/20 rounded-full flex justify-center items-center backdrop-blur border border-green-500/30 active:bg-green-500/40 text-green-500"
+          ><Target className="w-6 h-6" /></button>
+          <button 
+            onPointerDown={() => inputState.ability = true}
+            onPointerUp={() => inputState.ability = false}
+            onPointerLeave={() => inputState.ability = false}
+            onTouchStart={(e) => { e.preventDefault(); inputState.ability = true; }}
+            onTouchEnd={(e) => { e.preventDefault(); inputState.ability = false; }}
+            className="w-12 h-12 bg-yellow-500/20 rounded-full flex justify-center items-center backdrop-blur border border-yellow-500/30 active:bg-yellow-500/40 text-yellow-500"
+          ><Cpu className="w-6 h-6" /></button>
+        </div>
+        <div className="flex gap-4">
+           <button 
+             onPointerDown={() => inputState.fireSecondary = true}
+             onPointerUp={() => inputState.fireSecondary = false}
+             onPointerLeave={() => inputState.fireSecondary = false}
+             onTouchStart={(e) => { e.preventDefault(); inputState.fireSecondary = true; }}
+             onTouchEnd={(e) => { e.preventDefault(); inputState.fireSecondary = false; }}
+             className="w-16 h-16 bg-red-500/20 rounded-full flex justify-center items-center backdrop-blur border border-red-500/30 active:bg-red-500/40 text-[10px] font-black uppercase text-red-500"
+           ><Rocket className="w-8 h-8" /></button>
+           <button 
+             onPointerDown={() => inputState.firePrimary = true}
+             onPointerUp={() => inputState.firePrimary = false}
+             onPointerLeave={() => inputState.firePrimary = false}
+             onTouchStart={(e) => { e.preventDefault(); inputState.firePrimary = true; }}
+             onTouchEnd={(e) => { e.preventDefault(); inputState.firePrimary = false; }}
+             className="w-20 h-20 bg-blue-500/20 rounded-full flex justify-center items-center backdrop-blur border border-blue-500/30 active:bg-blue-500/40 text-[12px] font-black uppercase text-blue-500"
+           ><Crosshair className="w-10 h-10" /></button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const HUD: React.FC<{ engine: GameEngine, onExit: (restart?: boolean) => void }> = ({ engine, onExit }) => {
   const [hudState, setHudState] = useState({
     playerHealth: 0,
     playerMaxHealth: 1,
+    playerShield: 0,
+    playerMaxShield: 1,
     playerAbilityCooldown: 0,
+    playerKills: 0,
     teamCount: 0,
     enemyCount: 0,
     playerMSHealth: 0,
@@ -107,137 +226,129 @@ const HUD: React.FC<{ engine: GameEngine, onExit: (restart?: boolean) => void }>
     earnedCredits: 0
   });
 
-  useFrame(() => {
-    const player = engine.player;
-    const playerMS = engine.motherships.find(m => m.team === Team.PLAYER);
-    const enemyMS = engine.motherships.find(m => m.team === Team.ENEMY);
-    
-    setHudState({
-      playerHealth: player?.health || 0,
-      playerMaxHealth: player?.maxHealth || 1,
-      playerAbilityCooldown: Math.max(0, (player?.config.abilityCooldown || 0) - (Date.now() - (player?.lastAbilityUsed || 0))),
-      teamCount: engine.ships.filter(s => s.team === Team.PLAYER).length,
-      enemyCount: engine.ships.filter(s => s.team === Team.ENEMY).length,
-      playerMSHealth: playerMS?.health || 0,
-      enemyMSHealth: enemyMS?.health || 0,
-      gameOver: engine.gameOver,
-      winner: engine.winner,
-      playerType: player?.type || ShipType.FIGHTER,
-      respawnTimer: engine.playerRespawnTimer,
-      earnedCredits: engine.earnedCredits
-    });
-  });
+  const toggleFullScreen = () => {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen().catch(() => {
+        console.warn("Fullscreen API is not supported or was blocked");
+      });
+    } else {
+      document.exitFullscreen();
+    }
+  };
+
+  useEffect(() => {
+    let animationFrameId: number;
+    let lastTime = 0;
+
+    const updateHud = (time: number) => {
+      animationFrameId = requestAnimationFrame(updateHud);
+      if (time - lastTime < 50) return;
+      lastTime = time;
+
+      const player = engine.player;
+      const playerMS = engine.motherships.find(m => m.team === Team.PLAYER);
+      const enemyMS = engine.motherships.find(m => m.team === Team.ENEMY);
+      
+      setHudState({
+        playerHealth: player?.health || 0,
+        playerMaxHealth: player?.maxHealth || 1,
+        playerShield: player?.shield || 0,
+        playerMaxShield: player?.maxShield || 1,
+        playerAbilityCooldown: Math.max(0, (player?.config.abilityCooldown || 0) - (Date.now() - (player?.lastAbilityUsed || 0))),
+        playerKills: engine.playerKills,
+        teamCount: engine.ships.filter(s => s.team === Team.PLAYER).length,
+        enemyCount: engine.ships.filter(s => s.team === Team.ENEMY).length,
+        playerMSHealth: playerMS?.health || 0,
+        enemyMSHealth: enemyMS?.health || 0,
+        gameOver: engine.gameOver,
+        winner: engine.winner,
+        playerType: player?.type || ShipType.FIGHTER,
+        respawnTimer: engine.playerRespawnTimer,
+        earnedCredits: engine.earnedCredits
+      });
+    };
+
+    animationFrameId = requestAnimationFrame(updateHud);
+    return () => cancelAnimationFrame(animationFrameId);
+  }, [engine]);
 
   return (
-    <Html fullscreen pointerEvents="none">
-      <div className="absolute inset-0 pointer-events-none flex flex-col justify-between p-8">
-        <div className="flex justify-between items-start">
-          <div className="bg-blue-950/30 backdrop-blur-md p-5 rounded-2xl border border-blue-500/30 shadow-2xl">
-            <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-blue-400 mb-1">Status da Aliança</h3>
-            <div className="text-4xl font-black mb-3">{hudState.teamCount} <span className="text-sm font-medium text-slate-400">ATIVOS</span></div>
-            <div className="w-56 h-1.5 bg-slate-900 rounded-full overflow-hidden">
-               <div className="h-full bg-blue-500 shadow-[0_0_10px_#3b82f6] transition-all duration-700" style={{ width: `${(hudState.playerMSHealth / 2000) * 100}%` }} />
+    <div className="fixed inset-0 pointer-events-none flex flex-col justify-between p-4 md:p-6 z-40">
+      <div className="flex justify-between items-start">
+          <div className="flex flex-col gap-1 items-start bg-slate-950/20 backdrop-blur pb-2 px-3 pt-1 rounded border border-blue-500/10">
+            <h3 className="text-[10px] font-black uppercase tracking-widest text-blue-400 drop-shadow-md">Aliança</h3>
+            <div className="text-xl font-black text-white drop-shadow-md leading-none">{hudState.teamCount} <span className="text-[10px] text-blue-200">ATIVOS</span></div>
+            <div className="w-24 h-1 bg-slate-900 rounded-full overflow-hidden mt-1 shadow-[0_0_5px_rgba(0,0,0,0.5)]">
+               <div className="h-full bg-blue-500 shadow-[0_0_8px_#3b82f6] transition-all" style={{ width: `${(hudState.playerMSHealth / 2000) * 100}%` }} />
             </div>
-            <div className="mt-2 flex justify-between text-[9px] font-bold text-blue-300/60 uppercase">
-               <span>Nave Mãe</span>
-               <span>{Math.ceil(hudState.playerMSHealth)} HP</span>
-            </div>
+            <div className="text-[10px] font-black tracking-wider text-green-400 mt-1">KILLS: {hudState.playerKills}</div>
+          </div>
+          
+          <div className="pointer-events-auto hidden sm:block">
+            <button onClick={toggleFullScreen} className="p-2 text-white/50 hover:text-white transition-colors bg-black/20 rounded border border-white/10">
+               <Maximize className="w-4 h-4 shadow-sm" />
+            </button>
           </div>
 
-          <div className="bg-red-950/30 backdrop-blur-md p-5 rounded-2xl border border-red-500/30 shadow-2xl text-right">
-            <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-red-400 mb-1">Assinaturas Inimigas</h3>
-            <div className="text-4xl font-black mb-3">{hudState.enemyCount} <span className="text-sm font-medium text-slate-400">DETECTADAS</span></div>
-            <div className="w-56 h-1.5 bg-slate-900 rounded-full overflow-hidden ml-auto">
-               <div className="h-full bg-red-500 shadow-[0_0_10px_#ef4444] transition-all duration-700" style={{ width: `${(hudState.enemyMSHealth / 2000) * 100}%` }} />
-            </div>
-            <div className="mt-2 flex justify-between text-[9px] font-bold text-red-300/60 uppercase">
-               <span>{Math.ceil(hudState.enemyMSHealth)} HP</span>
-               <span>Fortaleza Alvo</span>
+          <div className="flex flex-col gap-1 items-end text-right bg-slate-950/20 backdrop-blur pb-2 px-3 pt-1 rounded border border-red-500/10">
+            <h3 className="text-[10px] font-black uppercase tracking-widest text-red-500 drop-shadow-md">Inimigos</h3>
+            <div className="text-xl font-black text-white drop-shadow-md leading-none">{hudState.enemyCount} <span className="text-[10px] text-red-200">ALVOS</span></div>
+            <div className="w-24 h-1 bg-slate-900 rounded-full overflow-hidden mt-1 shadow-[0_0_5px_rgba(0,0,0,0.5)]">
+               <div className="h-full bg-red-500 shadow-[0_0_8px_#ef4444] transition-all" style={{ width: `${(hudState.enemyMSHealth / 2000) * 100}%` }} />
             </div>
           </div>
         </div>
 
-        <div className="flex justify-center items-end gap-12 pb-6">
-           <div className="bg-slate-950/40 backdrop-blur-2xl p-8 rounded-[40px] border border-white/5 w-[500px] shadow-2xl relative overflow-hidden">
-              <div className="absolute top-0 left-0 w-full h-[2px] bg-gradient-to-r from-transparent via-blue-500 to-transparent opacity-50" />
+        <div className="flex justify-center items-end pb-8 pointer-events-none">
+           <div className="flex flex-col items-center gap-1 bg-slate-950/40 backdrop-blur-md px-6 py-2 rounded-xl border border-white/5 shadow-xl">
+              <div className="text-[10px] font-black uppercase tracking-widest text-blue-400 drop-shadow-md">
+                 {hudState.respawnTimer > 0 
+                   ? `REENTRADA ${(hudState.respawnTimer / 1000).toFixed(1)}S` 
+                   : `INTEGRIDADE ${hudState.playerType}`}
+              </div>
               
-              <div className="flex justify-between items-center mb-4">
-                 <div>
-                    <div className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1">Sistemas de Combate</div>
-                    <div className="text-xs font-bold text-blue-400 uppercase tracking-tighter">
-                       {hudState.respawnTimer > 0 
-                         ? `REENTRADA EM ${(hudState.respawnTimer / 1000).toFixed(1)}S` 
-                         : `${hudState.playerType} - ESTÁVEL`}
-                    </div>
-                 </div>
-                 <div className="text-3xl font-black tracking-tighter text-white">
-                    {Math.ceil(hudState.playerHealth)} <span className="text-[10px] font-bold text-slate-500">HP</span>
+              <div className="flex items-center gap-2">
+                 <div className="text-3xl font-black text-white drop-shadow-md leading-none tracking-tighter">
+                    {Math.ceil(hudState.playerHealth)}<span className="text-[14px] text-blue-300 ml-1">HP</span>
                  </div>
               </div>
 
-              <div className="h-2 w-full bg-slate-900 rounded-full overflow-hidden mb-8">
-                 <div className="h-full bg-gradient-to-r from-blue-600 via-indigo-500 to-cyan-400 transition-all duration-300" style={{ width: `${(hudState.playerHealth / hudState.playerMaxHealth) * 100}%` }} />
+              <div className="relative w-48 h-2 bg-slate-900 rounded-full overflow-hidden shadow-[0_0_5px_rgba(0,0,0,0.5)] mt-1 border border-white/5">
+                 <div className="absolute top-0 left-0 bottom-0 bg-blue-500 transition-all duration-300 shadow-[0_0_10px_#3b82f6]" style={{ width: `${(hudState.playerHealth / hudState.playerMaxHealth) * 100}%` }} />
               </div>
-
-              <div className="flex justify-around items-center gap-6">
-                 <div className="flex-1 space-y-2">
-                    <div className="flex justify-between text-[8px] font-black uppercase text-slate-500 tracking-widest">
-                       <span>Primário</span>
-                       <span className="text-blue-400 italic">Pronto</span>
-                    </div>
-                    <div className="h-1 bg-blue-500 rounded-full opacity-30" />
-                 </div>
-                 
-                 <div className="w-24 h-24 rounded-full border-4 border-slate-900 flex items-center justify-center relative">
-                    <svg className="absolute inset-0 w-full h-full -rotate-90">
-                       <circle cx="48" cy="48" r="44" fill="transparent" stroke="#1e293b" strokeWidth="4" />
-                       <circle 
-                         cx="48" cy="48" r="44" fill="transparent" stroke="#3b82f6" strokeWidth="4" 
-                         strokeDasharray={276} 
-                         strokeDashoffset={276 - (276 * Math.min(1, 1 - hudState.playerAbilityCooldown / 4000))} 
-                         className="transition-all duration-300"
-                       />
-                    </svg>
-                    <div className="text-center">
-                       <div className="text-[8px] font-black text-slate-500 uppercase">Especial</div>
-                       <div className={`text-[10px] font-black ${hudState.playerAbilityCooldown > 0 ? 'text-slate-600' : 'text-blue-400 animate-pulse'}`}>
-                          {hudState.playerAbilityCooldown > 0 ? `${(hudState.playerAbilityCooldown/1000).toFixed(1)}s` : 'READY'}
-                       </div>
-                    </div>
-                 </div>
-
-                 <div className="flex-1 space-y-2">
-                    <div className="flex justify-between text-[8px] font-black uppercase text-slate-500 tracking-widest">
-                       <span>Homing</span>
-                       <span className="text-cyan-400 italic">Auto</span>
-                    </div>
-                    <div className="h-1 bg-cyan-500 rounded-full opacity-30" />
-                 </div>
+              {hudState.playerShield > 0 && (
+                <div className="relative w-48 h-1 bg-slate-900 overflow-hidden shadow-[0_0_5px_rgba(0,0,0,0.5)] mt-1 border border-white/5">
+                   <div className="absolute top-0 left-0 bottom-0 bg-blue-300 transition-all duration-300 shadow-[0_0_10px_#93c5fd]" style={{ width: `${(hudState.playerShield / hudState.playerMaxShield) * 100}%` }} />
+                </div>
+              )}
+              <div className="w-48 flex justify-between mt-1">
+                 <span className="text-[8px] font-black text-slate-500 uppercase">Esp</span>
+                 <span className={`text-[8px] font-black ${hudState.playerAbilityCooldown === 0 ? 'text-yellow-400 drop-shadow-[0_0_5px_#facc15]' : 'text-slate-600'}`}>{hudState.playerAbilityCooldown === 0 ? 'PRONTO' : 'RECARGA'}</span>
               </div>
            </div>
         </div>
 
         {hudState.gameOver && (
           <div className="absolute inset-0 bg-black/95 backdrop-blur-3xl flex items-center justify-center z-50 p-6 pointer-events-auto">
-             <div className="text-center p-16 bg-slate-950 border border-white/5 rounded-[60px] shadow-2xl max-w-2xl">
-                <h1 className={`text-8xl font-black mb-6 tracking-tighter uppercase ${hudState.winner === Team.PLAYER ? 'text-blue-500 drop-shadow-[0_0_30px_rgba(59,130,246,0.5)]' : 'text-red-600'}`}>
+             <div className="text-center p-8 md:p-16 bg-slate-950 border border-white/5 rounded-[40px] md:rounded-[60px] shadow-2xl w-full max-w-2xl">
+                <h1 className={`text-6xl md:text-8xl font-black mb-6 tracking-tighter uppercase ${hudState.winner === Team.PLAYER ? 'text-blue-500 drop-shadow-[0_0_30px_rgba(59,130,246,0.5)]' : 'text-red-600'}`}>
                    {hudState.winner === Team.PLAYER ? 'Vitória' : 'Derrota'}
                 </h1>
-                <p className="text-slate-400 text-lg font-medium mb-12 tracking-tight opacity-70">
+                <p className="text-slate-400 text-sm md:text-lg font-medium mb-12 tracking-tight opacity-70">
                    {hudState.winner === Team.PLAYER 
                      ? 'A hegemonia inimiga foi destruída. O quadrante está seguro.' 
                      : 'A frota foi dizimada. A resistência terminou.'}
                 </p>
-                <div className="flex flex-col sm:flex-row gap-6 justify-center">
+                <div className="flex flex-col sm:flex-row gap-4 md:gap-6 justify-center">
                    <button 
                      onClick={() => onExit(true)} 
-                     className="bg-white text-black px-12 py-5 rounded-2xl font-black uppercase tracking-[0.2em] hover:scale-105 active:scale-95 transition-all text-sm pointer-events-auto"
+                     className="bg-white text-black px-8 py-4 md:px-12 md:py-5 rounded-2xl font-black uppercase tracking-[0.2em] hover:scale-105 active:scale-95 transition-all text-xs md:text-sm pointer-events-auto"
                    >
                       Reiniciar Missão
                    </button>
                    <button 
                      onClick={() => onExit(false)} 
-                     className="bg-slate-900 text-white px-12 py-5 rounded-2xl font-black uppercase tracking-[0.2em] hover:bg-slate-800 active:scale-95 transition-all text-sm pointer-events-auto flex items-center justify-center gap-2"
+                     className="bg-slate-900 text-white px-8 py-4 md:px-12 md:py-5 rounded-2xl font-black uppercase tracking-[0.2em] hover:bg-slate-800 active:scale-95 transition-all text-xs md:text-sm pointer-events-auto flex items-center justify-center gap-2"
                    >
                       Menu Principal
                       <span className="text-blue-400 font-bold ml-2">({hudState.earnedCredits} CR)</span>
@@ -246,8 +357,68 @@ const HUD: React.FC<{ engine: GameEngine, onExit: (restart?: boolean) => void }>
              </div>
           </div>
         )}
+
+        {!hudState.gameOver && <MobileControls />}
       </div>
-    </Html>
+  );
+};
+
+const tempObject = new THREE.Object3D();
+const tempColor = new THREE.Color();
+
+const ParticleSystem: React.FC<{ engine: GameEngine }> = ({ engine }) => {
+  const meshRef = useRef<THREE.InstancedMesh>(null);
+  
+  // Create a minimal icosahedron for particles (low poly)
+  const [geometry] = useState(() => new THREE.IcosahedronGeometry(1, 0));
+  const [material] = useState(() => new THREE.MeshBasicMaterial({ 
+    color: 0xffffff,
+    transparent: true,
+    opacity: 0.8,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false
+  }));
+
+  useEffect(() => {
+     if (meshRef.current) {
+         // Pre-allocate color buffer to avoid GPU driver crashes on dynamic array allocations
+         meshRef.current.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(engine.particles.length * 3), 3);
+     }
+  }, [engine.particles.length]);
+
+  useFrame(() => {
+    if (!meshRef.current) return;
+    
+    const maxParticles = engine.particles.length;
+    let count = 0;
+    
+    // We update all active particles
+    for (let i = 0; i < maxParticles; i++) {
+       const p = engine.particles[i];
+       if (p.active) {
+          // X -> X, Z -> Y, Y -> Z
+          tempObject.position.set(p.x, p.z, p.y);
+          // Scale down based on life
+          const scale = p.size * Math.max(0, p.life / p.maxLife);
+          tempObject.scale.set(scale, scale, scale);
+          tempObject.updateMatrix();
+          
+          meshRef.current.setMatrixAt(count, tempObject.matrix);
+          tempColor.setHex(p.color);
+          meshRef.current.setColorAt(count, tempColor);
+          count++;
+       }
+    }
+    
+    meshRef.current.count = count;
+    meshRef.current.instanceMatrix.needsUpdate = true;
+    if (meshRef.current.instanceColor) {
+        meshRef.current.instanceColor.needsUpdate = true;
+    }
+  });
+
+  return (
+     <instancedMesh ref={meshRef} args={[geometry, material, engine.particles.length]} />
   );
 };
 
@@ -282,20 +453,42 @@ const GameScene: React.FC<{ engine: GameEngine, onExit: (restart?: boolean) => v
   useFrame((state, delta) => {
     const player = engine.player;
     if (player && player.health > 0) {
-      if (keys.current.has('w')) {
-        player.vx += Math.cos(player.angle) * player.config.speed * 0.15;
-        player.vy += Math.sin(player.angle) * player.config.speed * 0.15;
+      if (inputState.joystick.x !== 0 || inputState.joystick.y !== 0) {
+        // Joystick gives y positive for UP. Game engine uses y positive for DOWN (since it maps to 3D Z-axis usually).
+        const targetAngle = Math.atan2(-inputState.joystick.y, inputState.joystick.x);
+        
+        // Rotate towards target angle
+        const diff = targetAngle - player.angle;
+        const normalizedDiff = Math.atan2(Math.sin(diff), Math.cos(diff));
+        player.angle += Math.sign(normalizedDiff) * Math.min(Math.abs(normalizedDiff), player.config.rotationSpeed * 2);
+        
+        // Move with speed based on distance
+        const distance = Math.min(1, Math.sqrt(inputState.joystick.x**2 + inputState.joystick.y**2) / 50);
+        player.vx += Math.cos(player.angle) * player.config.speed * 0.15 * distance;
+        player.vy += Math.sin(player.angle) * player.config.speed * 0.15 * distance;
+      } else {
+        if (keys.current.has('w') || inputState.up) {
+          player.vx += Math.cos(player.angle) * player.config.speed * 0.15;
+          player.vy += Math.sin(player.angle) * player.config.speed * 0.15;
+        }
+        if (keys.current.has('s') || inputState.down) {
+          player.vx -= Math.cos(player.angle) * player.config.speed * 0.1;
+          player.vy -= Math.sin(player.angle) * player.config.speed * 0.1;
+        }
+        if (keys.current.has('a') || inputState.left) player.angle -= player.config.rotationSpeed;
+        if (keys.current.has('d') || inputState.right) player.angle += player.config.rotationSpeed;
       }
-      if (keys.current.has('s')) {
-        player.vx -= Math.cos(player.angle) * player.config.speed * 0.1;
-        player.vy -= Math.sin(player.angle) * player.config.speed * 0.1;
-      }
-      if (keys.current.has('a')) player.angle += player.config.rotationSpeed;
-      if (keys.current.has('d')) player.angle -= player.config.rotationSpeed;
 
-      if (mouse.current.left) player.fire(engine, false);
-      if (mouse.current.right) player.fire(engine, true);
-      if (keys.current.has(' ')) player.useAbility(engine);
+      if (keys.current.has('e') || inputState.target) {
+        let nearestEnemy = engine.getNearestTargetTo(player.x, player.y, player.team);
+        if (nearestEnemy) {
+          player.angle = Math.atan2(nearestEnemy.y - player.y, nearestEnemy.x - player.x);
+        }
+      }
+
+      if (mouse.current.left || inputState.firePrimary) player.fire(engine, false);
+      if (mouse.current.right || inputState.fireSecondary) player.fire(engine, true);
+      if (keys.current.has(' ') || inputState.ability) player.useAbility(engine);
     }
 
     engine.update();
@@ -303,20 +496,40 @@ const GameScene: React.FC<{ engine: GameEngine, onExit: (restart?: boolean) => v
 
   return (
     <>
-      <HUD engine={engine} onExit={onExit} />
       <ChaseCamera playerRef={playerRef} />
-      <ambientLight intensity={0.5} />
-      <pointLight position={[100, 100, 100]} intensity={1.5} />
-      <Stars radius={500} depth={50} count={15000} factor={4} saturation={0} fade speed={1} />
+      <ambientLight intensity={4.5} />
+      <directionalLight position={[100, 200, 100]} intensity={6.5} color="#fff4e6" shadow />
+      <pointLight position={[-100, -100, -100]} intensity={3} color="#3b82f6" />
+      <color attach="background" args={['#070716']} />
+      <fog attach="fog" args={['#070716', 500, 7000]} />
+      <Stars radius={500} depth={50} count={15000} factor={4} saturation={0.5} fade speed={1} />
       
+      {/* Planetas */}
+      <mesh position={[1500, -500, -3000]}>
+        <sphereGeometry args={[400, 32, 32]} />
+        <meshStandardMaterial color="#4f46e5" roughness={0.7} />
+      </mesh>
+      <mesh position={[-2500, 800, 2000]}>
+        <sphereGeometry args={[800, 32, 32]} />
+        <meshStandardMaterial color="#b91c1c" roughness={0.9} />
+        <mesh rotation={[Math.PI / 2.2, 0, 0]}>
+          <ringGeometry args={[1000, 1400, 64]} />
+          <meshStandardMaterial color="#fca5a5" transparent opacity={0.5} side={THREE.DoubleSide} />
+        </mesh>
+      </mesh>
+      <mesh position={[3000, 2000, 1500]}>
+        <sphereGeometry args={[200, 32, 32]} />
+        <meshStandardMaterial color="#10b981" roughness={0.6} emissive="#064e3b" emissiveIntensity={0.2} />
+      </mesh>
+
+      <ParticleSystem engine={engine} />
+
       {/* Rest of scene as before */}
       {engine.ships.map((ship) => (
         <Ship3D key={ship.id} ship={ship} isPlayer={ship.isPlayer} playerRef={ship.isPlayer ? playerRef : undefined} />
       ))}
 
-      {engine.bullets.map((b, idx) => (
-        <Bullet3D key={`b-${idx}-${b.life}-${b.x.toFixed(0)}`} bullet={b} />
-      ))}
+      <BulletSystem engine={engine} />
 
       {engine.motherships.map((ms, idx) => (
         <group key={`ms-${idx}`} position={[ms.x, ms.z, ms.y]}>
@@ -373,10 +586,15 @@ export const GameView: React.FC<GameViewProps> = ({ playerType, upgrades, onExit
 
   // We should pass onExit down to HUD
   return (
-    <div className="relative w-full h-screen overflow-hidden bg-black text-white font-sans select-none">
+    <div 
+      className="relative w-full h-screen overflow-hidden bg-black text-white font-sans select-none touch-callout-none"
+      onContextMenu={(e) => e.preventDefault()}
+    >
       <Canvas shadows camera={{ fov: 60 }}>
         <GameScene engine={engine} onExit={(restart) => onExit(engine.earnedCredits, restart)} />
       </Canvas>
+      <HUD engine={engine} onExit={onExit} />
+      <Radar engine={engine} />
     </div>
   );
 };
