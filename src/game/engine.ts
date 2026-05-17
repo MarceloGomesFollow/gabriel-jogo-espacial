@@ -142,14 +142,20 @@ export class Ship {
 
   fire(engine: GameEngine, isMissile: boolean) {
     const now = Date.now();
+    
+    let damageMult = 1.0;
+    if (this.isPlayer && engine.upgrades) {
+        damageMult += engine.upgrades.damage * 0.20; // +20% per level
+    }
+
     if (isMissile) {
       if (now - this.lastMissileFired > 1000 / this.config.missileRate) {
-        engine.bullets.push(new Bullet(this.x, this.y, this.z, this.angle, 15, this.team, 50, true));
+        engine.bullets.push(new Bullet(this.x, this.y, this.z, this.angle, 15, this.team, Math.floor(50 * damageMult), true));
         this.lastMissileFired = now;
       }
     } else {
       if (now - this.lastFired > 1000 / this.config.fireRate) {
-        engine.bullets.push(new Bullet(this.x, this.y, this.z, this.angle, 25, this.team, 10, false));
+        engine.bullets.push(new Bullet(this.x, this.y, this.z, this.angle, 25, this.team, Math.floor(10 * damageMult), false));
         this.lastFired = now;
       }
     }
@@ -233,11 +239,14 @@ export class GameEngine {
   gameOver: boolean = false;
   winner: Team | null = null;
 
+  earnedCredits: number = 0;
+  upgrades: any = null;
+
   constructor() {
     this.init();
   }
 
-  init(playerShipType: ShipType = ShipType.FIGHTER) {
+  init(playerShipType: ShipType = ShipType.FIGHTER, upgrades?: any) {
     this.ships = [];
     this.bullets = [];
     this.motherships = [];
@@ -245,6 +254,8 @@ export class GameEngine {
     this.winner = null;
     this.playerRespawnTimer = 0;
     this.selectedPlayerType = playerShipType;
+    this.upgrades = upgrades || { health: 0, speed: 0, damage: 0, cooldown: 0 };
+    this.earnedCredits = 0;
     
     // Motherships
     this.motherships.push(new Mothership(-4000, 0, Team.PLAYER));
@@ -270,8 +281,27 @@ export class GameEngine {
 
   respawnPlayer() {
     this.player = new Ship("player", -3800, 0, Team.PLAYER, this.selectedPlayerType, true);
-    this.player.health *= 1.4; // 40% health boost for player
+    
+    // Base player boost
+    let hpMod = 1.4;
+    let speedMod = 1.0;
+    let cdMod = 1.0;
+
+    // Apply Upgrades
+    if (this.upgrades) {
+       hpMod += this.upgrades.health * 0.15; // +15% per level
+       speedMod += this.upgrades.speed * 0.10; // +10% per level
+       cdMod -= this.upgrades.cooldown * 0.10; // -10% per level
+    }
+
+    // Clone config so we don't mutate the base game config for AI
+    this.player.config = { ...this.player.config };
+    this.player.config.speed *= speedMod;
+    this.player.config.abilityCooldown *= cdMod;
+
+    this.player.health *= hpMod;
     this.player.maxHealth = this.player.health;
+    
     this.ships.push(this.player);
   }
 
@@ -336,7 +366,11 @@ export class GameEngine {
              bullet.life = 0;
              return;
           }
+          const checkKill = ship.health > 0;
           ship.health -= bullet.damage;
+          if (checkKill && ship.health <= 0 && bullet.team === Team.PLAYER) {
+              this.earnedCredits += 120 * (ship.type === ShipType.TANK ? 2 : 1);
+          }
           bullet.life = 0;
           return;
         }
@@ -350,7 +384,11 @@ export class GameEngine {
         const dy = ms.y - bullet.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
         if (dist < ms.size) {
+          const checkKill = ms.health > 0;
           ms.health -= bullet.damage;
+          if (checkKill && ms.health <= 0 && bullet.team === Team.PLAYER) {
+             this.earnedCredits += 5000;
+          }
           bullet.life = 0;
           return;
         }

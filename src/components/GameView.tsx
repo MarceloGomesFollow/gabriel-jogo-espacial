@@ -13,7 +13,8 @@ import { ShipModel } from './ShipModel';
 
 interface GameViewProps {
   playerType: ShipType;
-  onExit: () => void;
+  upgrades: any;
+  onExit: (earned: number, restart?: boolean) => void;
 }
 
 // Separate component for the camera logic
@@ -74,7 +75,7 @@ const Ship3D: React.FC<{ ship: any, isPlayer?: boolean, playerRef?: any }> = ({ 
 
   return (
     <group ref={groupRef}>
-      <ShipModel type={ship.type} teamColor={ship.team === Team.PLAYER ? "#3b82f6" : "#ef4444"} isPlayer={isPlayer} />
+      <ShipModel type={ship.type} teamColor={ship.team === Team.PLAYER ? "#3b82f6" : "#ef4444"} isPlayer={isPlayer} ship={ship} />
       {ship.abilityActive && ship.type === ShipType.TANK && (
         <mesh>
           <sphereGeometry args={[ship.config.size * 0.1, 16, 16]} />
@@ -90,7 +91,7 @@ const Ship3D: React.FC<{ ship: any, isPlayer?: boolean, playerRef?: any }> = ({ 
 };
 
 // Separate HUD component to prevent Canvas re-renders
-const HUD: React.FC<{ engine: GameEngine }> = ({ engine }) => {
+const HUD: React.FC<{ engine: GameEngine, onExit: (restart?: boolean) => void }> = ({ engine, onExit }) => {
   const [hudState, setHudState] = useState({
     playerHealth: 0,
     playerMaxHealth: 1,
@@ -102,7 +103,8 @@ const HUD: React.FC<{ engine: GameEngine }> = ({ engine }) => {
     gameOver: false,
     winner: null as Team | null,
     playerType: ShipType.FIGHTER,
-    respawnTimer: 0
+    respawnTimer: 0,
+    earnedCredits: 0
   });
 
   useFrame(() => {
@@ -121,7 +123,8 @@ const HUD: React.FC<{ engine: GameEngine }> = ({ engine }) => {
       gameOver: engine.gameOver,
       winner: engine.winner,
       playerType: player?.type || ShipType.FIGHTER,
-      respawnTimer: engine.playerRespawnTimer
+      respawnTimer: engine.playerRespawnTimer,
+      earnedCredits: engine.earnedCredits
     });
   });
 
@@ -227,16 +230,17 @@ const HUD: React.FC<{ engine: GameEngine }> = ({ engine }) => {
                 </p>
                 <div className="flex flex-col sm:flex-row gap-6 justify-center">
                    <button 
-                     onClick={() => window.location.reload()} 
+                     onClick={() => onExit(true)} 
                      className="bg-white text-black px-12 py-5 rounded-2xl font-black uppercase tracking-[0.2em] hover:scale-105 active:scale-95 transition-all text-sm pointer-events-auto"
                    >
                       Reiniciar Missão
                    </button>
                    <button 
-                     onClick={() => window.location.reload()} 
-                     className="bg-slate-900 text-white px-12 py-5 rounded-2xl font-black uppercase tracking-[0.2em] hover:bg-slate-800 active:scale-95 transition-all text-sm pointer-events-auto"
+                     onClick={() => onExit(false)} 
+                     className="bg-slate-900 text-white px-12 py-5 rounded-2xl font-black uppercase tracking-[0.2em] hover:bg-slate-800 active:scale-95 transition-all text-sm pointer-events-auto flex items-center justify-center gap-2"
                    >
                       Menu Principal
+                      <span className="text-blue-400 font-bold ml-2">({hudState.earnedCredits} CR)</span>
                    </button>
                 </div>
              </div>
@@ -247,7 +251,7 @@ const HUD: React.FC<{ engine: GameEngine }> = ({ engine }) => {
   );
 };
 
-const GameScene: React.FC<{ engine: GameEngine }> = ({ engine }) => {
+const GameScene: React.FC<{ engine: GameEngine, onExit: (restart?: boolean) => void }> = ({ engine, onExit }) => {
   const playerRef = useRef<THREE.Group>(null);
   const keys = useRef<Set<string>>(new Set());
   const mouse = useRef({ left: false, right: false });
@@ -299,7 +303,7 @@ const GameScene: React.FC<{ engine: GameEngine }> = ({ engine }) => {
 
   return (
     <>
-      <HUD engine={engine} />
+      <HUD engine={engine} onExit={onExit} />
       <ChaseCamera playerRef={playerRef} />
       <ambientLight intensity={0.5} />
       <pointLight position={[100, 100, 100]} intensity={1.5} />
@@ -360,17 +364,18 @@ const GameScene: React.FC<{ engine: GameEngine }> = ({ engine }) => {
   );
 };
 
-export const GameView: React.FC<GameViewProps> = ({ playerType, onExit }) => {
+export const GameView: React.FC<GameViewProps> = ({ playerType, upgrades, onExit }) => {
   const [engine] = useState(() => new GameEngine());
 
   useEffect(() => {
-    engine.init(playerType);
-  }, [playerType, engine]);
+    engine.init(playerType, upgrades);
+  }, [playerType, engine, upgrades]);
 
+  // We should pass onExit down to HUD
   return (
     <div className="relative w-full h-screen overflow-hidden bg-black text-white font-sans select-none">
       <Canvas shadows camera={{ fov: 60 }}>
-        <GameScene engine={engine} />
+        <GameScene engine={engine} onExit={(restart) => onExit(engine.earnedCredits, restart)} />
       </Canvas>
     </div>
   );
