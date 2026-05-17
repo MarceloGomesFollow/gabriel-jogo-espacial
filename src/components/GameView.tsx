@@ -215,6 +215,7 @@ const HUD: React.FC<{ engine: GameEngine, onExit: (restart?: boolean) => void }>
     playerMaxShield: 1,
     playerAbilityCooldown: 0,
     playerKills: 0,
+    playerSpeed: 0,
     teamCount: 0,
     enemyCount: 0,
     playerMSHealth: 0,
@@ -249,6 +250,11 @@ const HUD: React.FC<{ engine: GameEngine, onExit: (restart?: boolean) => void }>
       const playerMS = engine.motherships.find(m => m.team === Team.PLAYER);
       const enemyMS = engine.motherships.find(m => m.team === Team.ENEMY);
       
+      let speed = 0;
+      if (player && player.health > 0) {
+        speed = Math.floor(Math.sqrt(player.vx**2 + player.vy**2) * 10);
+      }
+
       setHudState({
         playerHealth: player?.health || 0,
         playerMaxHealth: player?.maxHealth || 1,
@@ -256,6 +262,7 @@ const HUD: React.FC<{ engine: GameEngine, onExit: (restart?: boolean) => void }>
         playerMaxShield: player?.maxShield || 1,
         playerAbilityCooldown: Math.max(0, (player?.config.abilityCooldown || 0) - (Date.now() - (player?.lastAbilityUsed || 0))),
         playerKills: engine.playerKills,
+        playerSpeed: speed,
         teamCount: engine.ships.filter(s => s.team === Team.PLAYER).length,
         enemyCount: engine.ships.filter(s => s.team === Team.ENEMY).length,
         playerMSHealth: playerMS?.health || 0,
@@ -281,7 +288,10 @@ const HUD: React.FC<{ engine: GameEngine, onExit: (restart?: boolean) => void }>
             <div className="w-24 h-1 bg-slate-900 rounded-full overflow-hidden mt-1 shadow-[0_0_5px_rgba(0,0,0,0.5)]">
                <div className="h-full bg-blue-500 shadow-[0_0_8px_#3b82f6] transition-all" style={{ width: `${(hudState.playerMSHealth / 2000) * 100}%` }} />
             </div>
-            <div className="text-[10px] font-black tracking-wider text-green-400 mt-1">KILLS: {hudState.playerKills}</div>
+            <div className="flex gap-3 mt-1">
+              <div className="text-[10px] font-black tracking-wider text-green-400">KILLS: {hudState.playerKills}</div>
+              <div className="text-[10px] font-black tracking-wider text-yellow-400">VELOC: {hudState.playerSpeed} U/s</div>
+            </div>
           </div>
           
           <div className="pointer-events-auto hidden sm:block">
@@ -430,23 +440,39 @@ const GameScene: React.FC<{ engine: GameEngine, onExit: (restart?: boolean) => v
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => keys.current.add(e.key.toLowerCase());
     const handleKeyUp = (e: KeyboardEvent) => keys.current.delete(e.key.toLowerCase());
-    const handleMouseDown = (e: MouseEvent) => {
-      if (e.button === 0) mouse.current.left = true;
-      if (e.button === 2) mouse.current.right = true;
+    const handleMouseDown = (e: MouseEvent | TouchEvent) => {
+      // Allow shooting and avoid conflict with HUD buttons
+      if (e.target && (e.target as HTMLElement).closest && (e.target as HTMLElement).closest('.pointer-events-auto')) return;
+      if ('button' in e) {
+        if (e.button === 0) mouse.current.left = true;
+        if (e.button === 2) mouse.current.right = true;
+      } else {
+        // Touch event
+        mouse.current.left = true;
+      }
     };
-    const handleMouseUp = (e: MouseEvent) => {
-      if (e.button === 0) mouse.current.left = false;
-      if (e.button === 2) mouse.current.right = false;
+    const handleMouseUp = (e: MouseEvent | TouchEvent) => {
+      if ('button' in e) {
+        if (e.button === 0) mouse.current.left = false;
+        if (e.button === 2) mouse.current.right = false;
+      } else {
+        // Touch event
+        mouse.current.left = false;
+      }
     };
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
-    window.addEventListener('mousedown', handleMouseDown);
-    window.addEventListener('mouseup', handleMouseUp);
+    window.addEventListener('mousedown', handleMouseDown as EventListener);
+    window.addEventListener('mouseup', handleMouseUp as EventListener);
+    window.addEventListener('touchstart', handleMouseDown as EventListener, { passive: false });
+    window.addEventListener('touchend', handleMouseUp as EventListener);
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
-      window.removeEventListener('mousedown', handleMouseDown);
-      window.removeEventListener('mouseup', handleMouseUp);
+      window.removeEventListener('mousedown', handleMouseDown as EventListener);
+      window.removeEventListener('mouseup', handleMouseUp as EventListener);
+      window.removeEventListener('touchstart', handleMouseDown as EventListener);
+      window.removeEventListener('touchend', handleMouseUp as EventListener);
     };
   }, []);
 
@@ -457,15 +483,16 @@ const GameScene: React.FC<{ engine: GameEngine, onExit: (restart?: boolean) => v
         // Joystick gives y positive for UP. Game engine uses y positive for DOWN (since it maps to 3D Z-axis usually).
         const targetAngle = Math.atan2(-inputState.joystick.y, inputState.joystick.x);
         
-        // Rotate towards target angle
+        // Rotate towards target angle smoothly but quickly
         const diff = targetAngle - player.angle;
         const normalizedDiff = Math.atan2(Math.sin(diff), Math.cos(diff));
-        player.angle += Math.sign(normalizedDiff) * Math.min(Math.abs(normalizedDiff), player.config.rotationSpeed * 2);
+        player.angle += Math.sign(normalizedDiff) * Math.min(Math.abs(normalizedDiff), player.config.rotationSpeed * 3);
         
-        // Move with speed based on distance
-        const distance = Math.min(1, Math.sqrt(inputState.joystick.x**2 + inputState.joystick.y**2) / 50);
-        player.vx += Math.cos(player.angle) * player.config.speed * 0.15 * distance;
-        player.vy += Math.sin(player.angle) * player.config.speed * 0.15 * distance;
+        // Move with speed based on distance along the TARGET angle, not the player angle.
+        // This makes it so pushing "Forward" (Up) immediately pushes the ship up globally.
+        const distance = Math.min(1, Math.sqrt(inputState.joystick.x**2 + inputState.joystick.y**2) / 40);
+        player.vx += Math.cos(targetAngle) * player.config.speed * 0.15 * distance;
+        player.vy += Math.sin(targetAngle) * player.config.speed * 0.15 * distance;
       } else {
         if (keys.current.has('w') || inputState.up) {
           player.vx += Math.cos(player.angle) * player.config.speed * 0.15;

@@ -127,7 +127,7 @@ export default function App() {
                      <div className="w-full h-40 md:h-48 bg-slate-950/50 relative overflow-hidden flex items-center justify-center">
                        {selectedShip === type ? (
                           <Suspense fallback={<div className="flex items-center justify-center h-full text-[10px] uppercase font-black opacity-20">Iniciando...</div>}>
-                             <Canvas camera={{ position: [0, 5, 0.01], fov: 45 }}>
+                             <Canvas camera={{ position: [0, 8, 0.01], fov: 60 }}>
                                 <color attach="background" args={['#070716']} />
                                 <ambientLight intensity={3.5} />
                                 <directionalLight position={[10, 10, 5]} intensity={4.5} color="#ffffff" shadow />
